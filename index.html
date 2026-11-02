@@ -355,20 +355,25 @@
         // ================================================================
         //  SHARED DATE PARSER
         // ================================================================
-        function parseThaiDate(dateStr) {
-            if (!dateStr) return null;
-            const sep = dateStr.includes('-') ? '-' : dateStr.includes('/') ? '/' : null;
-            if (sep) {
-                const parts = dateStr.split(sep);
-                if (parts.length === 3) {
-                    let day = parseInt(parts[0]), month = parseInt(parts[1]), year = parseInt(parts[2]);
-                    if (year > 2500) year -= 543; // BE → CE
-                    return new Date(year, month - 1, day);
-                }
-            }
-            const d = new Date(dateStr);
-            return isNaN(d) ? null : d;
+       function parseThaiDate(v) {
+    if (v === null || v === undefined || v === '') return null;
+    if (v instanceof Date) return isNaN(v) ? null : v;
+    if (typeof v === 'number') return new Date(Math.round((v - 25569) * 86400000)); // Excel serial
+    const dateStr = String(v).trim();
+    const sep = dateStr.includes('-') ? '-' : dateStr.includes('/') ? '/' : null;
+    if (sep) {
+        const parts = dateStr.split(sep).map(Number);
+        if (parts.length === 3 && parts.every(n => !isNaN(n))) {
+            let day, month, year;
+            if (parts[0] > 31) { [year, month, day] = parts; }   // yyyy-mm-dd
+            else { [day, month, year] = parts; }                  // dd-mm-yyyy
+            if (year > 2500) year -= 543; // พ.ศ. → ค.ศ.
+            return new Date(year, month - 1, day);
         }
+    }
+    const d = new Date(dateStr);
+    return isNaN(d) ? null : d;
+}
 
         function toBuddhistYear(ceYear) { return ceYear + 543; }
 
