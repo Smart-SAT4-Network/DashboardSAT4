@@ -197,6 +197,20 @@
                 </div>
                 <div class="h-96"><canvas id="timelineChart"></canvas></div>
             </div>
+            <div class="bg-white rounded-xl card-shadow p-8 mb-8 border-l-4 border-sky-500">
+    <div class="flex items-center mb-6 gap-3">
+        <div class="bg-sky-100 p-3 rounded-lg mr-1 text-xl leading-none">📅</div>
+        <div class="flex-1">
+            <h3 id="weeklyTitle" class="text-xl font-semibold text-gray-800">แนวโน้มเหตุการณ์รายสัปดาห์</h3>
+            <p class="text-gray-600 text-sm">จำนวนเหตุการณ์ต่อสัปดาห์ (สัปดาห์เริ่มวันจันทร์)</p>
+        </div>
+        <select id="weeklyMode" class="rounded-lg border-gray-300 border p-2 text-sm">
+            <option value="continuous">ต่อเนื่องตามเวลา</option>
+            <option value="byYear">เปรียบเทียบรายปี (สัปดาห์ที่ 1–53)</option>
+        </select>
+    </div>
+    <div class="h-96"><canvas id="weeklyChart"></canvas></div>
+</div>
 
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
                 <div class="bg-white rounded-xl card-shadow p-8 border-l-4 border-orange-500">
@@ -665,6 +679,7 @@
             createEventGroupPieChart(data);
             createProvinceChart(data);
             createTimelineChart(data);
+            createWeeklyChart(data);
             createPriorityChart(data);
             createSensitivityCharts(data);
             createStatusChart(data);
@@ -916,6 +931,102 @@
         }
         // ==========================================
 
+        function getWeekStart(d) {
+    const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); // ถอยกลับไปวันจันทร์
+    return x;
+}
+function getISOWeek(d) {
+    const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+    t.setUTCDate(t.getUTCDate() + 4 - (t.getUTCDay() || 7));
+    const ys = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+    return { year: t.getUTCFullYear(), week: Math.ceil(((t - ys) / 86400000 + 1) / 7) };
+}
+
+function createWeeklyChart(data) {
+    const mode = document.getElementById('weeklyMode').value;
+    const mn = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+    const fontOpt = { family: 'Sarabun', size: 12 };
+    const dates = data.map(r => parseThaiDate(r.Date_Received)).filter(d => d && !isNaN(d));
+
+    document.getElementById('weeklyTitle').textContent = `แนวโน้มเหตุการณ์รายสัปดาห์ (N= ${dates.length.toLocaleString()})`;
+    if (chartInstances.weekly) chartInstances.weekly.destroy();
+    if (!dates.length) return;
+
+    let labels, datasets, tooltipTitle;
+
+    if (mode === 'continuous') {
+        // นับตามสัปดาห์
+        const counts = {};
+        dates.forEach(d => { const k = getWeekStart(d).getTime(); counts[k] = (counts[k] || 0) + 1; });
+        const keys = Object.keys(counts).map(Number);
+        const start = new Date(Math.min(...keys)), end = new Date(Math.max(...keys));
+
+        // เติมสัปดาห์ที่ไม่มีเหตุการณ์ให้เป็น 0
+        const weeks = [];
+        for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 7)) weeks.push(new Date(d));
+        const values = weeks.map(w => counts[w.getTime()] || 0);
+
+        // ค่าเฉลี่ยเคลื่อนที่ 4 สัปดาห์
+        const ma = values.map((_, i) => {
+            if (i < 3) return null;
+            return +((values[i] + values[i-1] + values[i-2] + values[i-3]) / 4).toFixed(2);
+        });
+
+        labels = weeks.map(w => `${w.getDate()} ${mn[w.getMonth()]} ${String(w.getFullYear() + 543).slice(-2)}`);
+        tooltipTitle = items => {
+            const s = weeks[items[0].dataIndex], e = new Date(s); e.setDate(e.getDate() + 6);
+            return `สัปดาห์ ${s.getDate()} ${mn[s.getMonth()]} ${s.getFullYear()+543} – ${e.getDate()} ${mn[e.getMonth()]} ${e.getFullYear()+543}`;
+        };
+        datasets = [
+            { label: 'จำนวนเหตุการณ์/สัปดาห์', data: values, borderColor: 'rgba(14,165,233,1)',
+              backgroundColor: 'rgba(14,165,233,0.15)', fill: true, tension: 0.3, borderWidth: 2,
+              pointRadius: weeks.length > 60 ? 0 : 3, pointHoverRadius: 5 },
+            { label: 'ค่าเฉลี่ยเคลื่อนที่ 4 สัปดาห์', data: ma, borderColor: 'rgba(239,68,68,1)',
+              borderDash: [6, 4], borderWidth: 2, fill: false, tension: 0.3, pointRadius: 0 }
+        ];
+    } else {
+        // เปรียบเทียบรายปี แกน X = สัปดาห์ที่ 1–53
+        const byYear = {};
+        dates.forEach(d => {
+            const { year, week } = getISOWeek(d);
+            const by = year + 543;
+            if (!byYear[by]) byYear[by] = Array(53).fill(0);
+            byYear[by][week - 1]++;
+        });
+        const colors = ['139,92,246','59,130,246','16,185,129','245,101,101','249,115,22','236,72,153','20,184,166'];
+        labels = Array.from({ length: 53 }, (_, i) => `W${i + 1}`);
+        tooltipTitle = items => `สัปดาห์ที่ ${items[0].dataIndex + 1}`;
+        datasets = Object.keys(byYear).sort().map((y, i) => ({
+            label: `ปี พ.ศ. ${y}`, data: byYear[y],
+            borderColor: `rgba(${colors[i % colors.length]},1)`, backgroundColor: `rgba(${colors[i % colors.length]},0.1)`,
+            borderWidth: 2, tension: 0.3, fill: false, pointRadius: 2, pointHoverRadius: 5
+        }));
+    }
+
+    chartInstances.weekly = new Chart(document.getElementById('weeklyChart').getContext('2d'), {
+        type: 'line',
+        data: { labels, datasets },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: { position: 'top', labels: { font: fontOpt, usePointStyle: true, boxWidth: 8 } },
+                tooltip: { callbacks: { title: tooltipTitle },
+                           titleFont: { family: 'Sarabun', size: 14 }, bodyFont: { family: 'Sarabun', size: 13 } }
+            },
+            scales: {
+                y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.1)' },
+                     ticks: { font: fontOpt, stepSize: 1, callback: v => Number.isInteger(v) ? v : '' } },
+                x: { grid: { color: 'rgba(0,0,0,0.05)' },
+                     ticks: { font: fontOpt, maxRotation: 60, autoSkip: true, maxTicksLimit: mode === 'continuous' ? 26 : 27 } }
+            }
+        }
+    });
+}
+
+document.getElementById('weeklyMode').addEventListener('change', () => createWeeklyChart(currentData));
+
         function createPriorityChart(data) {
             const pc={};
             data.forEach(r=>{ const p=r.Priority||'ไม่ระบุ'; pc[p]=(pc[p]||0)+1; });
@@ -976,7 +1087,7 @@
   function composeWithTitle(canvas,t){const dpr=window.devicePixelRatio||1,pad=12,tp=18,ta=Math.round((tp+pad*2)*dpr);const out=document.createElement('canvas');out.width=canvas.width;out.height=canvas.height+ta;const c=out.getContext('2d');c.fillStyle='#fff';c.fillRect(0,0,out.width,out.height);c.fillStyle='#111827';c.font=`${Math.round(tp*dpr)}px system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif`;c.textBaseline='top';c.textAlign='left';c.fillText(t,Math.round(pad*dpr),Math.round(pad*dpr));c.drawImage(canvas,0,ta);return out;}
   function downloadPNGWithTitle(canvas,fname){const out=composeWithTitle(canvas,titleOf(canvas));const a=document.createElement('a');a.href=out.toDataURL('image/png');a.download=fname||((canvas.id||'chart')+'.png');document.body.appendChild(a);a.click();document.body.removeChild(a);}
   async function copyPNGWithTitle(canvas){try{if(!navigator.clipboard||typeof ClipboardItem==='undefined')throw new Error();const out=composeWithTitle(canvas,titleOf(canvas));const blob=await new Promise(r=>out.toBlob(r,'image/png'));await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);alert('คัดลอกภาพกราฟ (รวมชื่อ) แล้ว ✅');}catch(e){downloadPNGWithTitle(canvas,(canvas.id||'chart')+'.png');}}
-  function addChartToolbar(id){const cv=document.getElementById(id);if(!cv)return;const card=cv.closest('.bg-white.rounded-xl.card-shadow')||cv.closest('.bg-white')||cv.parentElement;if(!card)return;if(card.querySelector('[data-sun-toolbar="'+id+'"]'))return;const header=card.querySelector('.flex.items-center.mb-6,.flex.items-center.justify-between');const bar=document.createElement('div');bar.className='ml-auto flex items-center gap-2';bar.setAttribute('data-sun-toolbar',id);const b1=document.createElement('button');b1.type='button';b1.className='px-3 py-1.5 text-xs rounded-lg bg-gray-100 hover:bg-gray-200';b1.textContent='คัดลอกกราฟ';b1.addEventListener('click',()=>copyPNGWithTitle(cv));const b2=document.createElement('button');b2.type='button';b2.className='px-3 py-1.5 text-xs rounded-lg bg-gray-100 hover:bg-gray-200';b2.textContent='ดาวน์โหลด PNG';b2.addEventListener('click',()=>downloadPNGWithTitle(cv,id+'.png'));bar.appendChild(b1);bar.appendChild(b2);}
+  function addChartToolbar(id){const cv=document.getElementById(id);if(!cv)return;const card=cv.closest('.bg-white.rounded-xl.card-shadow')||cv.closest('.bg-white')||cv.parentElement;if(!card)return;if(card.querySelector('[data-sun-toolbar="'+id+'"]'))return;const header=card.querySelector('.flex.items-center.mb-6,.flex.items-center.justify-between');const bar=document.createElement('div');bar.className='ml-auto flex items-center gap-2';bar.setAttribute('data-sun-toolbar',id);const b1=document.createElement('button');b1.type='button';b1.className='px-3 py-1.5 text-xs rounded-lg bg-gray-100 hover:bg-gray-200';b1.textContent='คัดลอกกราฟ';b1.addEventListener('click',()=>copyPNGWithTitle(cv));const b2=document.createElement('button');b2.type='button';b2.className='px-3 py-1.5 text-xs rounded-lg bg-gray-100 hover:bg-gray-200';b2.textContent='ดาวน์โหลด PNG';b2.addEventListener('click',()=>downloadPNGWithTitle(cv,id+'.png'));bar.appendChild(b1);bar.appendChild(b2);if (header) header.appendChild(bar);}
   function injectChartToolbars(){['timelineChart','eventGroupPieChart','provinceChart','priorityChart','statusChart'].forEach(addChartToolbar);}
   function exportTableToExcel(tbl,filename){ensureXLSX(function(){try{const wb=XLSX.utils.table_to_book(tbl,{sheet:'Table'});XLSX.writeFile(wb,filename||'table.xlsx');}catch(e){alert('ไม่สามารถส่งออก Excel ได้');}});}
   function exportCurrentDataToExcel(filename){ensureXLSX(function(){try{if(!Array.isArray(window.currentData)||!window.currentData.length){alert('ไม่มีข้อมูล');return;}const ws=XLSX.utils.json_to_sheet(window.currentData);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Data');XLSX.writeFile(wb,filename||'dashboard_data.xlsx');}catch(e){alert('ไม่สามารถส่งออก Excel ได้');}});}
